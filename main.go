@@ -27,8 +27,8 @@ func main() {
 		cli.HandleList(args, store)
 	case "run":
 		cli.HandleRun(args, store)
-	// case "find":
-	// 	handleFind(args, store)
+	case "find":
+		cli.HandleFind(args, store)
 	default:
 		fmt.Printf("Unknown command: %s\n\n", subcommand)
 		printUsage()
