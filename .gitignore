@@ -14,7 +14,6 @@
 # Code coverage profiles and other test artifacts
 *.out
 coverage.*
-!coverage.go
 *.coverprofile
 profile.cov
 
@@ -31,3 +30,7 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+/.direnv
+tasks.json
+donezo
