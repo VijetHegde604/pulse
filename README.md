@@ -13,16 +13,18 @@
 
 **Pulse** is a minimalist CLI job runner built for developers who need a clean, structured way to define, inspect, and execute system commands directly from the terminal.
 
-Built entirely with the **Go standard library** without heavy external dependencies, Pulse provides a focused workflow for task management, streaming command output in real time while tracking execution lifecycle states.
+Pulse provides a focused workflow for task management, streaming command output in real time while tracking and persisting execution lifecycle states in an embedded SQLite database.
 
 ---
 
 ## Features
 
-- **Zero External Runtime Dependencies**: Pure Go standard library (`os/exec`, `text/tabwriter`, `flag`).
+- **Persistent Embedded SQLite Storage**: Jobs and lifecycle states are persisted locally in `pulse.db` with WAL mode and zero-CGO pure Go SQLite driver (`modernc.org/sqlite`).
+- **Robust Command Parsing & Flag Isolation**: Cleanly separates Pulse's own CLI options from target command arguments, preventing collisions with child command flags (e.g., `ping -c 4` or `ls -la`).
+- **Flexible Execution Syntax**: Supports unquoted commands (`-c echo Hello`), quoted command strings (`-c "echo Hello World"`), and standard POSIX end-of-options delimiters (`-- ls -la`).
 - **Expressive CLI Interface**: Intuitive subcommands (`add`, `list`, `run`, `find`) with both short and long flag support.
 - **Real-Time Output Streaming**: Directly streams task `stdout` and `stderr` to the terminal during execution.
-- **Lifecycle Status Tracking**: Automatically monitors job status (`pending` -> `running` -> `completed` / `failed`).
+- **Lifecycle Status Tracking**: Automatically monitors and records job status (`pending` -> `running` -> `completed` / `failed`).
 - **Clean Tabular Formatting**: Aligned terminal tables showing Job IDs, names, commands, status, and creation timestamps.
 - **Nix Flake & Direnv Support**: Ready-to-use isolated reproducible development environment out of the box.
 
@@ -44,10 +46,13 @@ pulse/
     │   ├── find.go        # 'find' subcommand handler
     │   ├── list.go        # 'list' subcommand handler
     │   └── run.go         # 'run' subcommand handler
+    ├── db/                # Database connection & schema migrations
+    │   └── db.go          # SQLite initialization (WAL mode) & migrations
     └── jobs/              # Core domain models and business logic
         ├── jobs.go        # Job and JobStatus definitions
+        ├── parser.go      # Shell command tokenization & quote parsing
         ├── runner.go      # Process execution & status transition logic
-        ├── store.go       # In-memory job repository
+        ├── store.go       # SQLite-backed persistent job repository
         └── printer.go     # Tabular formatting with text/tabwriter
 ```
 
@@ -56,10 +61,12 @@ pulse/
 | Package | Responsibility |
 | :--- | :--- |
 | `jobs.Job` | Represents a task unit containing an `ID`, `Name`, `Command`, `Args`, `Status`, and `CreatedAt` timestamp. |
-| `jobs.Store` | Manages registration, indexing, sequential ID generation, and lookup of jobs. |
-| `jobs.Run` | Spawns system processes via `os/exec`, streams stdout/stderr, and updates execution state. |
+| `jobs.Store` | Manages registration, indexing, status updates, and lookup of jobs in SQLite. |
+| `jobs.SplitCommandLine` | Tokenizes command strings while preserving quotes (`"..."`, `'...'`) and escape characters. |
+| `jobs.Run` | Spawns system processes via `os/exec`, streams stdout/stderr, and persists state transitions to the store. |
 | `jobs.Write` | Renders job collections into human-readable aligned tables using `text/tabwriter`. |
 | `cli.*` | Parses subcommand flags (`flag.FlagSet`) and delegates commands to the domain layer. |
+| `db.*` | Configures and opens SQLite with WAL journaling and runs schema migrations. |
 
 ---
 
@@ -115,25 +122,38 @@ Defines a new job with a descriptive name, target executable command, and any op
 
 ```bash
 pulse add -n <name> -c <command> [arguments...]
+# or using POSIX '--' delimiter
+pulse add -n <name> -- <command> [arguments...]
 ```
 
 **Flags:**
 | Flag | Shorthand | Required | Description |
 | :--- | :--- | :--- | :--- |
-| `--name` | `-n` | Yes | Name / label for the job |
-| `--command` | `-c` | Yes | Executable command to execute |
+| `--name` | `-n` | Yes | Name / label for the job (must appear before the command) |
+| `--command` | `-c` | Yes* | Executable command to execute (*or use `--` delimiter) |
+
+#### Command Parsing Rules:
+- **Flag Separation**: Pulse flags (`-n` / `--name`) must be specified **before** `-c`, `--command`, or `--`.
+- **Pass-Through Execution**: Everything following `-c`, `--command`, or `--` is treated as the command to execute. This prevents Pulse from misinterpreting flags that belong to the child command (such as `ping -c 4` or `docker run --name web`).
+- **Flexible Syntax**:
+  - **Unquoted**: `pulse add -n ping-dns -c ping -c 4 8.8.8.8`
+  - **Quoted string**: `pulse add -n ping-dns -c "ping -c 4 8.8.8.8"`
+  - **POSIX `--`**: `pulse add -n list-files -- ls -la /tmp`
 
 **Examples:**
 
 ```bash
-# Add a ping test
+# Add a ping test (target command's '-c 4' flag is safely preserved)
 pulse add -n "ping-dns" -c ping -c 4 8.8.8.8
 
 # Add a Go build task
 pulse add -n "build-app" -c go build ./...
 
-# Add a directory listing
-pulse add --name "list-files" --command ls -la
+# Add a quoted command string
+pulse add -n "echo-test" -c "echo Hello World"
+
+# Add a directory listing using the POSIX '--' delimiter
+pulse add --name "list-files" -- ls -la
 ```
 
 ---
@@ -150,19 +170,22 @@ pulse list
 
 ```text
 ID    NAME          COMMAND    STATUS       CREATED AT
-1     ping-dns      ping       pending      07 Oct 2026 01:30:15
-2     build-app     go         completed    07 Oct 2026 01:31:02
-3     list-files    ls         pending      07 Oct 2026 01:32:40
+1     ping-dns      ping       completed    07 Oct 2026 15:30:51
+2     build-app     go         completed    07 Oct 2026 15:31:02
+3     echo-test     echo       pending      07 Oct 2026 15:31:13
+4     list-files    ls         pending      07 Oct 2026 15:31:38
 ```
 
 ---
 
 ### 3. `pulse run` - Execute a Job
 
-Runs the job matching the specified ID. Streams output in real time and updates the job's status to `completed` or `failed`.
+Runs the job matching the specified ID. Streams output in real time and updates the job's status to `completed` or `failed` in the database.
 
 ```bash
 pulse run -i <id>
+# or
+pulse run --id <id>
 ```
 
 **Flags:**
@@ -181,12 +204,17 @@ pulse run -i 1
 ```text
 Running Job #1 ('ping-dns')...
 
+Command: "ping"
+Args: []string{"-c", "4", "8.8.8.8"}
+
 PING 8.8.8.8 (8.8.8.8) 56(84) bytes of data.
 64 bytes from 8.8.8.8: icmp_seq=1 ttl=116 time=14.2 ms
 64 bytes from 8.8.8.8: icmp_seq=2 ttl=116 time=13.8 ms
+64 bytes from 8.8.8.8: icmp_seq=3 ttl=116 time=14.1 ms
+64 bytes from 8.8.8.8: icmp_seq=4 ttl=116 time=13.9 ms
 
 --- 8.8.8.8 ping statistics ---
-2 packets transmitted, 2 received, 0% packet loss, time 1001ms
+4 packets transmitted, 4 received, 0% packet loss, time 3004ms
 
 Job #1 completed successfully.
 ```
@@ -198,32 +226,34 @@ Job #1 completed successfully.
 Looks up a specific job by its ID and displays its details.
 
 ```bash
+pulse find -i <id>
+# or
 pulse find -id <id>
 ```
 
 **Flags:**
-| Flag | Required | Description |
-| :--- | :--- | :--- |
-| `-id` | Yes | Target Job ID to search |
+| Flag | Shorthand | Required | Description |
+| :--- | :--- | :--- | :--- |
+| `--id` / `-id` | `-i` | Yes | Target Job ID to search |
 
 **Example:**
 
 ```bash
-pulse find -id 1
+pulse find -i 1
 ```
 
 **Output:**
 
 ```text
 ID    NAME        COMMAND    STATUS       CREATED AT
-1     ping-dns    ping       completed    07 Oct 2026 01:30:15
+1     ping-dns    ping       completed    07 Oct 2026 15:30:51
 ```
 
 ---
 
 ## Job Lifecycle
 
-Each job transitions through distinct lifecycle states managed by the runner:
+Each job transitions through distinct lifecycle states managed by the runner and persisted in SQLite:
 
 ```
 [ pending ] ---> ( pulse run ) ---> [ running ] ---> [ completed ] (exit 0)
@@ -234,7 +264,7 @@ Each job transitions through distinct lifecycle states managed by the runner:
 - **`pending`**: Job has been registered and is queued to run.
 - **`running`**: Job process is actively executing with stdout/stderr attached.
 - **`completed`**: Process finished successfully (exit code 0).
-- **`failed`**: Process failed or exited with an error.
+- **`failed`**: Process failed or exited with a non-zero exit code.
 - **`cancelled`**: Job was cancelled before completion.
 
 ---
@@ -245,6 +275,12 @@ Each job transitions through distinct lifecycle states managed by the runner:
 
 ```bash
 go run . <command>
+```
+
+### Running unit & integration tests
+
+```bash
+go test -v ./...
 ```
 
 ### Formatting & Linting
@@ -264,7 +300,7 @@ golangci-lint run
 
 ## Roadmap
 
-- [ ] **Persistent Storage**: Save jobs to SQLite or JSON file across CLI sessions.
+- [x] **Persistent Storage**: Save jobs and lifecycle states to SQLite with WAL mode across CLI sessions.
 - [ ] **Background Execution**: Daemonized asynchronous job execution mode.
 - [ ] **Execution History & Logs**: Log stdout and stderr to disk for historical replay.
 - [ ] **Job Cancellation & Timeouts**: Support graceful cancellation and execution timeouts.
