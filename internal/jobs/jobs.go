@@ -3,7 +3,7 @@ package jobs
 import "time"
 
 type Job struct {
-	ID        int
+	ID        int64
 	Name      string
 	Command   string
 	Args      []string
@@ -22,9 +22,8 @@ const (
 	StatusCancelled JobStatus = "cancelled"
 )
 
-func NewJob(id int, name, command string, args []string) *Job {
+func NewJob(name, command string, args []string) *Job {
 	return &Job{
-		ID:        id,
 		Name:      name,
 		Command:   command,
 		Args:      args,

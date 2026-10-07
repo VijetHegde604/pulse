@@ -1,42 +1,117 @@
 package jobs
 
-import "errors"
+import (
+	"database/sql"
+	"encoding/json"
+)
 
 type Store struct {
-	jobs map[int]*Job
+	db *sql.DB
 }
 
 // Create a new Store for storing the job
-func NewStore() *Store {
-	return &Store{jobs: make(map[int]*Job)}
+func NewStore(database *sql.DB) *Store {
+	return &Store{db: database}
 }
 
 // Add new job
-func (s *Store) Add(j Job) {
-	jobCopy := j
-	s.jobs[j.ID] = &jobCopy
+func (s *Store) Add(j *Job) error {
+
+	// Serialize the args into JSON
+	// sqlite doesnt have []string support
+	argsJSON, err := json.Marshal(j.Args)
+	if err != nil {
+		return err
+	}
+
+	result, err := s.db.Exec(
+		"INSERT INTO jobs (name, command, args, status, created_at) VALUES (?, ?, ?, ?, ?)",
+		j.Name, j.Command, argsJSON, j.Status, j.CreatedAt,
+	)
+	if err != nil {
+		return err
+	}
+
+	id, err := result.LastInsertId()
+	if err != nil {
+		return err
+	}
+
+	j.ID = id
+
+	return nil
 }
 
 // finding the job using id
 // returns a pointer to the job if found
 func (s *Store) Find(id int) (*Job, error) {
-	j, exists := s.jobs[id]
-	if !exists {
-		return nil, errors.New("Job not found!")
+	row := s.db.QueryRow(
+		"SELECT id, name, command, args, status, created_at FROM jobs WHERE id = ?",
+		id,
+	)
+
+	var job Job
+	var argsJSON string
+
+	err := row.Scan(
+		&job.ID,
+		&job.Name,
+		&job.Command,
+		&argsJSON,
+		&job.Status,
+		&job.CreatedAt,
+	)
+	if err != nil {
+		return nil, err
 	}
-	return j, nil
+
+	err = json.Unmarshal([]byte(argsJSON), &job.Args)
+	if err != nil {
+		return nil, err
+	}
+
+	return &job, nil
 }
 
 // Return all jobs
-func (s *Store) All() []Job {
-	list := make([]Job, 0, len(s.jobs))
-	for _, j := range s.jobs {
-		list = append(list, *j)
-	}
-	return list
-}
+func (s *Store) All() ([]Job, error) {
+	list := []Job{}
 
-// NextID returns the next available ID for a new job
-func (s *Store) NextID() int {
-	return len(s.jobs) + 1
+	rows, err := s.db.Query(
+		"SELECT id, name, command, args, status, created_at FROM jobs",
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var job Job
+		var argsJSON string
+
+		err := rows.Scan(
+			&job.ID,
+			&job.Name,
+			&job.Command,
+			&argsJSON,
+			&job.Status,
+			&job.CreatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		err = json.Unmarshal([]byte(argsJSON), &job.Args)
+		if err != nil {
+			return nil, err
+		}
+
+		list = append(list, job)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return list, nil
 }

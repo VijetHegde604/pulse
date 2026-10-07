@@ -14,7 +14,10 @@ func HandleList(args []string, store *jobs.Store) {
 	cmdFlags.Parse(args)
 
 	// Retrieve all jobs from store
-	allJobs := store.All()
+	allJobs, err := store.All()
+	if err != nil {
+		fmt.Println(err)
+	}
 
 	// Handle empty state gracefully
 	if len(allJobs) == 0 {

@@ -5,17 +5,32 @@ import (
 	"os"
 
 	"github.com/VijetHegde604/pulse/internal/cli"
+	"github.com/VijetHegde604/pulse/internal/db"
 	"github.com/VijetHegde604/pulse/internal/jobs"
 )
 
 func main() {
+	// Database handler
+	dbPath := "./pulse.db"
+	database, err := db.Open(dbPath)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	defer database.Close()
+
+	if err := db.Migrate(database); err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+
 	if len(os.Args) < 2 {
 		printUsage()
 		os.Exit(1)
 	}
 
 	// Initialize the store
-	store := jobs.NewStore()
+	store := jobs.NewStore(database)
 
 	subcommand := os.Args[1]
 	args := os.Args[2:]

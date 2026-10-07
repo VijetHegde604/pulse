@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 )
@@ -8,6 +9,8 @@ import (
 // Run the command with the arguements and update the status accordingly
 func Run(j *Job) error {
 	j.Status = StatusRunning
+	fmt.Printf("Command: %q\n", j.Command)
+	fmt.Printf("Args: %#v\n", j.Args)
 
 	// Pass the running commands output and error to stdout
 	// (Helps to print the output to the terminal)
