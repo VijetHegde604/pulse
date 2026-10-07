@@ -44,6 +44,8 @@ func main() {
 		cli.HandleRun(args, store)
 	case "find":
 		cli.HandleFind(args, store)
+	case "help", "-h", "--help":
+		printUsage()
 	default:
 		fmt.Printf("Unknown command: %s\n\n", subcommand)
 		printUsage()

@@ -12,9 +12,9 @@ import (
 func HandleRun(args []string, store *jobs.Store) {
 	cmdFlags := flag.NewFlagSet("run", flag.ExitOnError)
 
-	var id int
-	cmdFlags.IntVar(&id, "id", 0, "ID of the job to run")
-	cmdFlags.IntVar(&id, "i", 0, "ID of the job to run (shorthand)")
+	var id int64
+	cmdFlags.Int64Var(&id, "id", 0, "ID of the job to run")
+	cmdFlags.Int64Var(&id, "i", 0, "ID of the job to run (shorthand)")
 
 	cmdFlags.Parse(args)
 
@@ -24,7 +24,6 @@ func HandleRun(args []string, store *jobs.Store) {
 		os.Exit(1)
 	}
 
-	// 1. Look up pointer to job in store
 	job, err := store.Find(id)
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
@@ -33,10 +32,7 @@ func HandleRun(args []string, store *jobs.Store) {
 
 	fmt.Printf("Running Job #%d ('%s')...\n\n", job.ID, job.Name)
 
-	// 2. Pass *Job directly to jobs.Run
-	// Status changes (StatusRunning -> StatusCompleted / StatusFailed)
-	// apply directly to the job in the store since 'job' is a pointer.
-	if err := jobs.Run(job); err != nil {
+	if err := jobs.Run(job, store); err != nil {
 		fmt.Printf("\nJob #%d failed: %v\n", job.ID, err)
 		os.Exit(1)
 	}
