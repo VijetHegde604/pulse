@@ -33,4 +33,6 @@ go.work.sum
 
 /.direnv
 tasks.json
-donezo
+*.db
+*.db-shm
+*.db-wal
